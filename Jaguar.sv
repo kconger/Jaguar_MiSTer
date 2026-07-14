@@ -94,7 +94,7 @@ assign VIDEO_ARY = (!ar) ? auto_video_ary : 12'd0;
 //         0123456789ABCDEF
 // 000-015 ..X.XXXXXXX..XX.  000 001 002 003 004 005 006 007 008 009 010 011 012 013 014 015
 // 016-031 ..XXXX.XXXXXXXXX  016 017 018 019 020 021 022 023 024 025 026 027 028 029 030 031
-// 032-047 XXXXXXXXXXXX....  032 033 034 035 036 037 038 039 040 041 042 043 044 045 046 047
+// 032-047 XXXXXXXXXXXXX...  032 033 034 035 036 037 038 039 040 041 042 043 044 045 046 047
 // 048-063 ....XXXXX.....XX  048 049 050 051 052 053 054 055 056 057 058 059 060 061 062 063
 // 064-079 ................  064 065 066 067 068 069 070 071 072 073 074 075 076 077 078 079
 // 080-095 .XX.XX..........  080 081 082 083 084 085 086 087 088 089 090 091 092 093 094 095
@@ -138,6 +138,8 @@ localparam CONF_STR = {
 	"P2-;",
 	//"P2O[41:40],Light Gun,Disabled,Joy1,Joy2,Mouse;",
 //	"DDP2O[43:42],Cross,Small,Medium,Large,None;",
+	"P2-;",
+	"P2O[44],USERIO,JagLink,I2S;",
 	// BIOS Menu
 	"P3,Assign BIOS Files;",
 	"P3-;",
@@ -601,10 +603,20 @@ wire startcas;
 wire [15:0] aud_16_l;
 wire [15:0] aud_16_r;
 
+// USERIO option bit:
+// 0 = JagLink on USER port
+// 1 = External I2S on USER port using the MT32Pi placement (WS=2, SCK=4, DAT=5)
+wire butch_i2s_wired = status[44];
+
+wire wired_i2s_ws = USER_IN[2];
+wire wired_i2s_sck = USER_IN[4];
+wire wired_i2s_rxd = USER_IN[5];
+
 wire ser_data_in;
 wire ser_data_out;
-assign ser_data_in = USER_IN[2];
-assign USER_OUT[1] = ser_data_out;
+// When external I2S is enabled, USER pin 2 is WS, so disconnect JagLink RX/TX.
+assign ser_data_in = butch_i2s_wired ? 1'b1 : USER_IN[2];
+assign USER_OUT[1] = butch_i2s_wired ? 1'b1 : ser_data_out;
 
 wire m68k_clk;
 wire [23:1] m68k_addr;
@@ -747,6 +759,11 @@ jaguar jaguar_inst
 	.ddreq(1'b1 /*!status[54]*/),
 	.comlynx_tx( ser_data_out ) ,
 	.comlynx_rx( ser_data_in ) ,
+
+	.i2s_wired_override( butch_i2s_wired ),
+	.i2s_wired_i2srxd( wired_i2s_rxd ),
+	.i2s_wired_sck( wired_i2s_sck ),
+	.i2s_wired_ws( wired_i2s_ws ),
 
 	// cheat engine
 	.m68k_clk(m68k_clk),

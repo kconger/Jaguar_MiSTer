@@ -82,6 +82,12 @@ module jaguar
 	output              comlynx_tx,
 	input               comlynx_rx,
 
+	// External USER-port I2S override inputs (top-level selected).
+	input               i2s_wired_override,
+	input               i2s_wired_i2srxd,
+	input               i2s_wired_sck,
+	input               i2s_wired_ws,
+
 	output              startcas,
 
 // NOT_NETLIST
@@ -1458,12 +1464,24 @@ wire b_eoe0l = xoel[0];
 wire b_eoe1l = xoel[1];
 wire [31:0] b_dout;
 wire b_doe;
+wire b_i2srxd;
+wire b_sen;
+wire b_sck;
+wire b_ws;
 wire b_ee_cs;
 wire b_ee_sk;
 wire b_ee_dout;
 wire b_ee_din;
+// Keep Butch/Jerry bus wiring intact; only substitute SCK/WS/RXD when override is enabled.
+wire b_xsck_oe = i2s_wired_override ? 1'b1 : b_sen;
+wire b_xsck_out = i2s_wired_override ? i2s_wired_sck : b_sck;
+wire b_xws_oe = b_xsck_oe;
+wire b_xws_out = i2s_wired_override ? i2s_wired_ws : b_ws;
 wire b_eint;
 wire [31:0] cart_qt = b_doe ? b_dout : cart_q;
+
+assign j_xi2srxd = i2s_wired_override ? i2s_wired_i2srxd : b_i2srxd;
+
 _butch butch_inst
 (
 	.resetl          (xresetl),
@@ -1486,11 +1504,11 @@ _butch butch_inst
 	.audwaitl        (audwaitl),
 	.aud_cbusy       (aud_busy),
 	.cdg_in          (cdg_in[63:0]),
-	.i2srxd          (j_xi2srxd),
+	.i2srxd          (b_i2srxd),
 	.eint            (b_eint),
-	.sen             (b_xsck_oe),
-	.sck             (b_xsck_out),
-	.ws              (b_xws_out),
+	.sen             (b_sen),
+	.sck             (b_sck),
+	.ws              (b_ws),
 	.override        (b_override),
 	.aud_ce          (aud_ce),
 	.aud_sess        (aud_sess),
@@ -1517,10 +1535,6 @@ _butch butch_inst
 	.cd_sector2448   (cd_sector2448),
 	.sys_clk         (sys_clk)
 );
-wire b_xsck_oe;
-wire b_xsck_out;
-wire b_xws_oe = b_xsck_oe;
-wire b_xws_out;
 wire hackbus;
 wire hackbus1;
 wire hackbus2;
@@ -1645,14 +1659,24 @@ assign vga_b = draw_crosshair ? 8'h00 : xb;
 //assign vga_b = {xb[7:1], 1'b0}; // FIXME: Real Jaguar has the LSB of blue disconnected for no obvious reason.
 
 // AUDIO / Philips TDA1545A model
-wire   i2s_ws   = j_xws_in;
-wire   i2s_data = j_xi2stxd;
-wire   i2s_clk  = j_xsck_in;
+wire   dac_i2s_ws   = j_xws_in;
+wire   dac_i2s_data = j_xi2stxd;
+wire   dac_i2s_clk  = j_xsck_in;
+wire   ext_i2s_ws   = b_xws_out;
+wire   ext_i2s_data = j_xi2srxd;
+wire   ext_i2s_clk  = b_xsck_out;
 wire   qws;
 wire   mute;
 wire [17:0] dac_iol;
 wire [17:0] dac_ior;
 wire        dac_sample_strobe;
+wire signed [15:0] dac_pcm_l;
+wire signed [15:0] dac_pcm_r;
+wire signed [15:0] ext_pcm_l;
+wire signed [15:0] ext_pcm_r;
+
+assign aud_16_l = i2s_wired_override ? ext_pcm_l : dac_pcm_l;
+assign aud_16_r = i2s_wired_override ? ext_pcm_r : dac_pcm_r;
 
 // TDA1545A uses a EIAJ-like formatting and not standard I2S. Top men at atari appeared to work
 // around this by adding a couple of flip flips onto jerry's output. That's why it's like that. The
@@ -1672,9 +1696,9 @@ flipflop mute_ff
 flipflop i2s_ws_ff
 (
 	.sys_clk (sys_clk),
-	.clk     (i2s_clk),
+	.clk     (dac_i2s_clk),
 	.set     (1'b1),
-	.data    (i2s_ws),
+	.data    (dac_i2s_ws),
 	.clear   (mute),
 	.q       (qws)
 );
@@ -1683,16 +1707,28 @@ tda1545a tda1545a_inst
 (
 	.sys_clk       (sys_clk),
 	.reset_n       (xresetl),
-	.BCK           (i2s_clk),
+	.BCK           (dac_i2s_clk),
 	.WS            (qws),
-	.DATA          (i2s_data),
+	.DATA          (dac_i2s_data),
 	.GND           (1'b0),
 	.IREF          (16'h8000),
 	.IOL           (dac_iol),
 	.IOR           (dac_ior),
-	.pcm_l         (aud_16_l),
-	.pcm_r         (aud_16_r),
+	.pcm_l         (dac_pcm_l),
+	.pcm_r         (dac_pcm_r),
 	.sample_strobe (dac_sample_strobe)
+);
+
+// External USER-port source is standard I2S, not the Jaguar/TDA1545A pin format.
+i2s_receiver external_i2s_receiver_inst
+(
+	.sys_clk           (sys_clk),
+	.reset_n           (xresetl & i2s_wired_override),
+	.i2s_clk           (ext_i2s_clk),
+	.i2s_ws            (ext_i2s_ws),
+	.i2s_data          (ext_i2s_data),
+	.left              (ext_pcm_l),
+	.right             (ext_pcm_r)
 );
 
 endmodule
